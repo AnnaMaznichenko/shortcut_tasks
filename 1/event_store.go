@@ -133,8 +133,8 @@ func (es *EventStore) FindAfter(timestamp time.Time) []Event {
 	times := es.uniqueTimes[indexTime:]
 
 	var ids []int
-	for _, time := range times {
-		ids = append(ids, es.eventsIDByTimestamp[time]...)
+	for _, t := range times {
+		ids = append(ids, es.eventsIDByTimestamp[t]...)
 	}
 
 	events := make([]Event, 0, len(ids))
@@ -190,18 +190,30 @@ func (es *EventStore) GetRange(startID, endID int) []Event {
 }
 
 func (es *EventStore) Filter(predicate func(Event) bool) []Event {
-	es.mu.RLock()
-	defer es.mu.RUnlock()
-
 	// TODO: вернуть события, для которых predicate вернул true
+	es.mu.RLock()
 	events := make([]Event, 0, len(es.eventsByID))
 	for _, event := range es.eventsByID {
+		events = append(events, event)
+	}
+	es.mu.RUnlock()
+
+	n := 0
+	for _, event := range events {
 		if predicate(event) {
-			events = append(events, event)
+			events[n] = event
+			n++
 		}
 	}
 
-	return events
+	if n < len(events) / 2 {
+		result := make([]Event, n)
+		copy(result, events[:n])
+		
+		return result
+	}
+
+	return events[:n]
 }
 
 func main() {
