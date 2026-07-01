@@ -25,9 +25,9 @@ type LRUCache struct {
 	stats    *CacheStats
 }
 
-func NewLRUCache(capacity int) (*LRUCache, error) {
+func NewLRUCache(capacity int) *LRUCache {
 	if capacity < 1 {
-        return nil, fmt.Errorf("capacity must be at least 1, got %d", capacity)
+        capacity = 1
     }
 
 	return &LRUCache{
@@ -36,7 +36,7 @@ func NewLRUCache(capacity int) (*LRUCache, error) {
 		elements: make(map[string]*list.Element, capacity),
 		list:     list.New(),
 		stats:    &CacheStats{},
-	}, nil
+	}
 }
 
 func (c *LRUCache) Get(key string) (interface{}, bool) {
@@ -196,11 +196,7 @@ func (c *LRUCache) HitRate() float64 {
 }
 
 func main() {
-	cache, err := NewLRUCache(3)
-	if err != nil {
-		fmt.Println("Ошибка создания кэша:", err)
-        return
-	}
+	cache := NewLRUCache(3)
 
 	cache.Put("a", "one")
 	cache.Put("b", "two")
