@@ -3,18 +3,17 @@ package main
 import (
 	"fmt"
 	"sync"
-	"sync/atomic"
 	"time"
 )
 
-func worker(wg *sync.WaitGroup, stopped *atomic.Bool, jobs chan int, stopCh chan struct{}, number int) {
+func worker(wg *sync.WaitGroup, jobs chan int, stopCh chan struct{}, number int) {
 	defer wg.Done()
 
 	for {
 		//дополнительный неблокирующий селект, так как в основном может быть случайный выбор
+		//допустимо убрать, так как можем пренебречь временем обработки job
 		select {
 		case <-stopCh:
-			stopped.Store(true)
 			fmt.Println("Работа завершена по каналу stop в worker")
 			return
 		default:
@@ -22,16 +21,10 @@ func worker(wg *sync.WaitGroup, stopped *atomic.Bool, jobs chan int, stopCh chan
 
 		select {
 		case <-stopCh:
-			stopped.Store(true)
 			fmt.Println("Работа завершена по каналу stop в worker")
 			return
 		case job, ok := <-jobs:
 			if !ok {
-				return
-			}
-
-			//на случай если другой воркер успел установить флаг
-			if stopped.Load() {
 				return
 			}
 
@@ -78,14 +71,13 @@ func processJob(wg *sync.WaitGroup, number int, job int, stopCh <-chan struct{})
 
 func main() {
 	var wg sync.WaitGroup
-	var stopped atomic.Bool
 	jobs := make(chan int)
 	stopCh := make(chan struct{})
 
 	workerCount := 5
-	wg.Add(workerCount)
 	for i := 1; i <= workerCount; i++ {
-		go worker(&wg, &stopped, jobs, stopCh, i)
+		wg.Add(1)
+		go worker(&wg, jobs, stopCh, i)
 	}
 
 	jobsCount := 20
