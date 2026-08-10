@@ -196,7 +196,6 @@ func merge(ctx context.Context, eventsCh []<-chan Event) <-chan Event {
 	result := make(chan Event)
 
 	for _, event := range eventsCh {
-		event := event
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
