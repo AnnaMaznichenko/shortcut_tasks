@@ -119,7 +119,7 @@ func consume(in <-chan []Event) {
 	log.Printf("готово, всего батчей: %d", n)
 }
 
-func normalizeWeb(ctx context.Context, webEvent <-chan WebEvent) <-chan Event {
+func normalizeEvent[T any](ctx context.Context, ch <-chan T, convert func(T) Event) <-chan Event {
 	eventCh := make(chan Event)
 
 	go func() {
@@ -130,65 +130,44 @@ func normalizeWeb(ctx context.Context, webEvent <-chan WebEvent) <-chan Event {
 		for {
 			select {
 			case <-ctx.Done():
-				return 
-			case webEventBuff, ok := <- webEvent:
+				return
+			case value, ok := <-ch:
 				if !ok {
 					return
 				}
-				event = Event{
-					Source: "web",
-					UserID: webEventBuff.SessionID,
-					Action: webEventBuff.URL,
-					At: time.Unix(webEventBuff.TS, 0),
-				}
+				event = convert(value)
 			}
 
-			select {
-			case <-ctx.Done():
+			if !sendWithContext(ctx, eventCh, event) {
 				return
-			case eventCh <- event:
 			}
 		}
-		
+
 	}()
 
 	return eventCh
 }
 
-func normalizeApp(ctx context.Context, appEvent <-chan AppEvent) <-chan Event {
-	eventCh := make(chan Event)
-
-	go func() {
-		defer close(eventCh)
-		
-		var event Event
-
-		for {
-			select {
-			case <-ctx.Done():
-				return 
-			case appEventBuff, ok := <- appEvent:
-				if !ok {
-					return
-				}
-				event = Event{
-					Source: "app",
-					UserID: appEventBuff.DeviceID,
-					Action: appEventBuff.Screen,
-					At: appEventBuff.EventTime,
-				}
-			}
-
-			select {
-			case <-ctx.Done():
-				return
-			case eventCh <- event:
-			}
+func normalizeWeb(ctx context.Context, webEvent <-chan WebEvent) <-chan Event {
+	return normalizeEvent(ctx, webEvent, func(w WebEvent) Event {
+		return Event{
+			Source: "web",
+			UserID: w.SessionID,
+			Action: w.URL,
+			At:     time.Unix(w.TS, 0),
 		}
-		
-	}()
+	})
+}
 
-	return eventCh
+func normalizeApp(ctx context.Context, appEvent <-chan AppEvent) <-chan Event {
+	return normalizeEvent(ctx, appEvent, func(a AppEvent) Event {
+		return Event{
+			Source: "app",
+			UserID: a.DeviceID,
+			Action: a.Screen,
+			At:     a.EventTime,
+		}
+	})
 }
 
 func merge(ctx context.Context, eventsCh []<-chan Event) <-chan Event {
@@ -203,12 +182,14 @@ func merge(ctx context.Context, eventsCh []<-chan Event) <-chan Event {
 			for {
 				select {
 				case <-ctx.Done():
-					return 
+					return
 				case resultBuff, ok := <-event:
 					if !ok {
-						return 
+						return
 					}
-					result <- resultBuff
+					if !sendWithContext(ctx, result, resultBuff) {
+						return
+					}
 				}
 			}
 		}()
@@ -220,6 +201,15 @@ func merge(ctx context.Context, eventsCh []<-chan Event) <-chan Event {
 	}()
 
 	return result
+}
+
+func sendWithContext(ctx context.Context, ch chan<- Event, value Event) bool {
+	select {
+	case <-ctx.Done():
+		return false
+	case ch <- value:
+		return true
+	}
 }
 
 func batch(ctx context.Context, events <-chan Event, size int, timeout time.Duration) <-chan []Event {
@@ -240,23 +230,24 @@ func batch(ctx context.Context, events <-chan Event, size int, timeout time.Dura
 			batch = batch[:0]
 		}
 
-		for event := range events {
+		for {
 			select {
 			case <-ctx.Done():
-				return 
+				return
 			case <-timer.C:
 				sendAndClearBatch()
-			default:
+			case event, ok := <-events:
+				if !ok {
+					sendAndClearBatch()
+					return
+				}
+
 				if len(batch) == size {
 					sendAndClearBatch()
 				}
 
 				batch = append(batch, event)
 			}
-		}
-
-		if len(batch) > 0 {
-			sendAndClearBatch()
 		}
 	}()
 
@@ -277,35 +268,37 @@ func sendBatch(ctx context.Context, out chan []Event, batch []Event, timer *time
 }
 
 func resetTimer(t *time.Timer, d time.Duration) {
-    if !t.Stop() {
-        <-t.C
-    }
-    t.Reset(d)
+	if !t.Stop() {
+		select {
+		case <-t.C:
+		default:
+		}
+	}
+	t.Reset(d)
 }
 
 func RunPipeline(ctx context.Context, web <-chan WebEvent, app <-chan AppEvent, batchSize int, timeout time.Duration) <-chan []Event {
-    merged := merge(ctx, []<-chan Event{
+	merged := merge(ctx, []<-chan Event{
 		normalizeWeb(ctx, web),
 		normalizeApp(ctx, app),
 	})
 
-    return batch(ctx, merged, batchSize, timeout)
+	return batch(ctx, merged, batchSize, timeout)
 }
 
 func main() {
 	ctx, cancel := context.WithCancel(context.Background())
 	go func() {
-        time.Sleep(30 * time.Second)
-        cancel()
-    }()
+		time.Sleep(30 * time.Second)
+		cancel()
+	}()
 
-	every := time.Duration(1*time.Second)
+	every := time.Duration(1 * time.Second)
 	webEvent := genWeb(ctx, every)
 	appEvent := genApp(ctx, every)
 
 	batchSize := 10
-	timeout := time.Duration(20*time.Second)
+	timeout := time.Duration(20 * time.Second)
 	in := RunPipeline(ctx, webEvent, appEvent, batchSize, timeout)
 	consume(in)
 }
-
